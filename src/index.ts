@@ -1,5 +1,11 @@
+import fs from 'fs';
 import TwitterApi from 'twitter-api-v2';
-import { twitterKey, slackWebhookUrl, twitterQuery } from './settings';
+import {
+  twitterKey,
+  slackWebhookUrl,
+  twitterQuery,
+  newest_id_filepath,
+} from './settings';
 import { IncomingWebhook, IncomingWebhookSendArguments } from '@slack/webhook';
 
 type Tweet = {
@@ -17,27 +23,37 @@ type Tweet = {
   };
 };
 
-const searchTweets = async () => {
+const searchTweets = async (
+  query: string,
+  sinceId?: string,
+  max_results = 10 // 指定可能な最小値: 10
+) => {
   const twitterClient = new TwitterApi(twitterKey);
-  const roClient = twitterClient.readOnly;
+  const readOnlyClient = twitterClient.readOnly;
 
-  const { data, includes, meta } = await roClient.v2.search(twitterQuery, {
-    max_results: 10,
+  const { data } = await readOnlyClient.v2.search(query, {
+    max_results,
+    since_id: sinceId,
     'tweet.fields': ['created_at', 'source'],
     expansions: ['author_id'],
     'user.fields': ['username', 'name', 'profile_image_url'],
   });
+  const { includes, meta } = data;
+
+  if (meta.result_count === 0) {
+    return { tweets: [] as Tweet[], meta };
+  }
 
   const tweets: Tweet[] = data.data.map((tweet) => ({
     ...tweet,
     created_at:
       tweet.created_at &&
       new Date(Date.parse(tweet.created_at)).toLocaleString('ja-JP'),
-    author: includes.users?.find((user) => user.id === tweet.author_id),
+    author: includes?.users?.find((user) => user.id === tweet.author_id),
     is_retweet: tweet.text.startsWith('RT @'),
   }));
 
-  return tweets;
+  return { tweets: tweets.slice().reverse(), meta }; // ツイート日時降順を昇順に直している
 };
 
 const postSlackMessageOfTweet = async (tweet: Tweet) => {
@@ -79,11 +95,29 @@ const postSlackMessageOfTweet = async (tweet: Tweet) => {
   return result;
 };
 
+const loadNewestTweetId = () => {
+  if (fs.existsSync(newest_id_filepath)) {
+    return fs.readFileSync(newest_id_filepath).toString();
+  } else {
+    return undefined;
+  }
+};
+
+const writeNewestTweetId = (newestId: string) => {
+  fs.writeFileSync(newest_id_filepath, newestId);
+};
+
 const handler = async () => {
-  const tweets = await searchTweets();
-  tweets.map(async (tweet) => {
-    console.log(await postSlackMessageOfTweet(tweet));
-  });
+  const newest_id = loadNewestTweetId();
+  const { tweets, meta } = await searchTweets(twitterQuery, newest_id);
+  console.log(`${meta.result_count} tweets found.`);
+
+  if (tweets.length > 0) {
+    writeNewestTweetId(meta.newest_id);
+    tweets.map(async (tweet) => {
+      await postSlackMessageOfTweet(tweet);
+    });
+  }
 };
 
 handler();

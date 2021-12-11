@@ -14,3 +14,6 @@ if (process.env.SLACK_WEBHOOK_URL === undefined) {
   throw Error('SLACK_WEBHOOK_URL is not found');
 }
 export const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
+
+export const newest_id_filepath =
+  process.env.NEWEST_ID_FILEPATH || 'data/newest_id.txt';
